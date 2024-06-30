@@ -1,22 +1,13 @@
 import { defineStore } from 'pinia'
-import {
-  generateBundleHash,
-  generateSecret,
-  KnishIOClient,
-  Wallet
-} from '@wishknish/knishio-client-js/src'
+import { generateBundleHash, generateSecret, KnishIOClient, Wallet } from '@wishknish/knishio-client-js/src'
 import WalletBundle from 'src/models/WalletBundle'
 import AuthToken from '@wishknish/knishio-client-js/src/AuthToken'
 import BaseException from '@wishknish/knishio-client-js/src/exception/BaseException'
 import { KNISHIO_SETTINGS } from 'src/libraries/constants/knishio'
-import {
-  connectionDB,
-  deleteDataPromise,
-  getDataPromise,
-  setDataPromise
-} from 'src/libraries/storageDB'
+import { connectionDB, deleteDataPromise, getDataPromise, setDataPromise } from 'src/libraries/storageDB'
 import { randomString } from 'src/libraries/strings'
 import axios from 'axios'
+import PlainMessage from 'src/models/PlainMessage.js'
 
 const db = connectionDB()
 
@@ -42,7 +33,9 @@ const stateObj = {
   userRoles: false,
   parentApp: null,
   favoriteCards: {},
-  auth2fa: null
+  auth2fa: null,
+  peerId: null,
+  messages: []
 }
 
 const actionsObj = {
@@ -472,7 +465,54 @@ const actionsObj = {
     }
 
     return validServers
+  },
+
+  async startConversation (peerId) {
+    this.peerId = peerId
+    const messages = await this.searchMessages()
+    this.storeMessages(messages)
+  },
+
+  async finishConversation () {
+    this.peerId = null
+    this.messages = []
+  },
+
+  async postMessage (content) {
+    const message = new PlainMessage(content, this.bundle, this.peerId)
+    const response = await message.save(this.client, message.body())
+    if (response.error < 1) {
+      const postedMessage = await this.getOneMessages(message.uid)
+      this.storeMessages(postedMessage)
+      return true
+    }
+    return false
+  },
+
+  async searchMessages () {
+    const filter = PlainMessage.generateQuery(this.bundle, this.peerId, null)
+    return await this.client.queryMeta(filter)
+  },
+
+  async getOneMessages (metaId) {
+    const filter = PlainMessage.generateQuery(this.bundle, this.peerId, metaId)
+    return await this.client.queryMeta(filter)
+  },
+
+  storeMessages (response) {
+    if (response.instances === undefined || response.instances === null || response.instances.length === 0) {
+      return
+    }
+    response.instances.sort((a, b) => Number(a.createdAt) - Number(b.createdAt))
+    for (const i of response.instances) {
+      if (this.messages.some(m => m.id === i.metaId)) {
+        continue
+      }
+      this.messages.push(PlainMessage.convertToMessage(i, this.bundle))
+    }
+    console.log(this.messages)
   }
+
 }
 
 const gettersObj = {
@@ -507,6 +547,11 @@ const gettersObj = {
       token: KNISHIO_SETTINGS.encryptionToken,
       position: KNISHIO_SETTINGS.encryptionPosition
     })
+  },
+
+  isConversationStarted () {
+    console.info('DLT::isConversationStarted: ' + this.peerId)
+    return this.peerId !== null
   }
 }
 
